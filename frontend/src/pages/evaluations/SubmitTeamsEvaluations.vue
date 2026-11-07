@@ -182,7 +182,7 @@ onMounted(async () => {
 async function loadStudents() {
   // On the back end, the page number starts from 0, so subtract 1 here
   const result: FindStudentByTeamIdResponse = await findStudentsByTeamId(teamId.value)
-  students.value = result.data
+  students.value = result.data.filter(student => student.enabled)
 }
 
 // Load criteria information
@@ -204,7 +204,7 @@ async function prepareStartingPeerEvaluations() {
 
   // If the student has already submitted evaluations for the current week, load them
   if (result.data.length > 0) {
-    peerEvalutions.value = result.data
+    peerEvalutions.value = result.data.filter(evaluation => students.value.some(student => student.id === evaluation.evaluateeId))
     isNewSubmission = false
   } else {
     // If not, create a new set of evaluations

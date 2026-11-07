@@ -9,8 +9,8 @@ import jakarta.transaction.Transactional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.access.AccessDeniedException;
+import team.projectpulse.system.exception.StudentAlreadyInactiveException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -108,21 +108,38 @@ public class StudentService {
         Student oldStudent = this.studentRepository.findById(studentId)
                 .orElseThrow(() -> new ObjectNotFoundException("student", studentId));
 
-        // If the user is not an admin, then the user can only update her username, first rubricName, last rubricName, and email
+        // Profile updates preserve account status and roles for every caller.
         oldStudent.setUsername(update.getUsername());
         oldStudent.setFirstName(update.getFirstName());
         oldStudent.setLastName(update.getLastName());
         oldStudent.setEmail(update.getEmail());
 
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-
-        // If the user is an admin, then the user can update all the fields
-        if (authentication.getAuthorities().stream().anyMatch(grantedAuthority -> grantedAuthority.getAuthority().equals("ROLE_instructor"))) {
-            oldStudent.setEnabled(update.isEnabled());
-//            oldStudent.setRoles(update.getRoles());
-        }
-
         return this.studentRepository.save(oldStudent);
+    }
+
+    /** UC-STU-deactivate-student: ownership and the conditional state change share the row lock. */
+    public Student deactivateStudent(Integer studentId) {
+        boolean admin = this.userUtils.hasRole("ROLE_admin");
+        if (!admin && !this.userUtils.hasRole("ROLE_instructor")) {
+            throw new AccessDeniedException("Only a course admin or instructor may deactivate a student.");
+        }
+        Integer callerId = this.userUtils.getUserId();
+        if (callerId == null) {
+            throw new AccessDeniedException("Caller identity is required.");
+        }
+        Student student = this.studentRepository.findInDeactivationScopeForUpdate(studentId, callerId, admin)
+                .orElseThrow(() -> {
+                    if (!this.studentRepository.existsById(studentId)) {
+                        return new ObjectNotFoundException("student", studentId);
+                    }
+                    return new AccessDeniedException("The student is outside your course or assigned course section.");
+                });
+        // Scope is resolved before status, including when the student is already inactive.
+        if (!student.isEnabled()) {
+            throw new StudentAlreadyInactiveException();
+        }
+        student.setEnabled(false);
+        return student;
     }
 
     public void deleteStudent(Integer studentId) {

@@ -11,6 +11,8 @@ import java.util.Optional;
 @Repository
 public interface PeerEvaluationRepository extends JpaRepository<PeerEvaluation, Integer> {
 
+    boolean existsByWeekAndEvaluateeId(String week, Integer studentId);
+
     List<PeerEvaluation> findByWeekAndEvaluateeId(String week, Integer studentId);
 
     Optional<PeerEvaluation> findByWeekAndEvaluatorIdAndEvaluateeId(String week, Integer evaluatorId, Integer evaluateeId);

@@ -59,13 +59,19 @@ public class EvaluationService {
             throw new PeerEvaluationIllegalArgumentException("You must be assigned to a team before submitting a peer evaluation.");
         }
 
-        // Make sure the evaluator and evaluatee are on the same team. Compare team ids: Team does not override
-        // equals, so comparing the entities is identity comparison and only happens to hold within one session.
+        // The evaluator is stamped from the caller by DTO conversion. Scope the locking
+        // lookup to her team before inspecting the target's account status.
         Integer evaluatorTeamId = evaluatorTeam.getTeamId();
-        Team evaluateeTeam = newPeerEvaluation.getEvaluatee().getTeam();
-        if (evaluatorTeamId == null || evaluateeTeam == null || !evaluatorTeamId.equals(evaluateeTeam.getTeamId())) {
+        if (evaluatorTeamId == null) {
             throw new PeerEvaluationIllegalArgumentException("The evaluator and evaluatee must be on the same team.");
         }
+        Student target = this.studentRepository.findByIdAndTeamIdForUpdate(
+                        newPeerEvaluation.getEvaluatee().getId(), evaluatorTeamId)
+                .orElseThrow(() -> new PeerEvaluationIllegalArgumentException("The evaluator and evaluatee must be on the same team."));
+        if (!target.isEnabled()) {
+            throw new PeerEvaluationIllegalArgumentException("An inactive student cannot receive peer evaluations or updates.");
+        }
+        newPeerEvaluation.setEvaluatee(target);
 
         // Make sure this is not a duplicate evaluation
         if (this.evaluationRepository.findByWeekAndEvaluatorIdAndEvaluateeId(newPeerEvaluation.getWeek(), newPeerEvaluation.getEvaluator().getId(), newPeerEvaluation.getEvaluatee().getId()).isPresent()) {
@@ -78,6 +84,7 @@ public class EvaluationService {
     public PeerEvaluation updatePeerEvaluation(Integer evaluationId, PeerEvaluation update) {
         return this.evaluationRepository.findById(evaluationId)
                 .map(oldEvaluation -> {
+                    oldEvaluation.setEvaluatee(requireActiveTarget(oldEvaluation.getEvaluatee().getId()));
                     // The week is read off the stored evaluation rather than off the update, because the caller
                     // writes the payload and could otherwise name an open week to reopen a closed evaluation.
                     requireOpenSubmissionWindow(oldEvaluation.getEvaluator().getSection(), oldEvaluation.getWeek(), WINDOW_CLOSED_MESSAGE);
@@ -87,6 +94,15 @@ public class EvaluationService {
                     return this.evaluationRepository.save(oldEvaluation);
                 })
                 .orElseThrow(() -> new ObjectNotFoundException("evaluation", evaluationId));
+    }
+
+    private Student requireActiveTarget(Integer studentId) {
+        Student student = this.studentRepository.findByIdForUpdate(studentId)
+                .orElseThrow(() -> new ObjectNotFoundException("student", studentId));
+        if (!student.isEnabled()) {
+            throw new PeerEvaluationIllegalArgumentException("An inactive student cannot receive peer evaluations or updates.");
+        }
+        return student;
     }
 
     /**
@@ -221,7 +237,11 @@ public class EvaluationService {
         report.setSectionName(this.sectionRepository.findById(sectionId).orElseThrow(() -> new ObjectNotFoundException("section", sectionId)).getSectionName());
 
         // Get all students in the section
-        List<Student> students = this.studentRepository.findBySectionSectionId(sectionId).stream().filter(student -> student.getTeam() != null).collect(Collectors.toList());
+        List<Student> students = this.studentRepository.findBySectionSectionId(sectionId).stream()
+                .filter(student -> student.isEnabled()
+                        ? student.getTeam() != null
+                        : this.evaluationRepository.existsByWeekAndEvaluateeId(week, student.getId()))
+                .toList();
 
         // For each student, compute her average total score, collect all public comments and private comments, and compute rating averages for each criterion.
         students.forEach(student -> {
