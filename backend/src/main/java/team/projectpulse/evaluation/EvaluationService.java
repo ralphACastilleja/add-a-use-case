@@ -49,6 +49,7 @@ public class EvaluationService {
     }
 
     public PeerEvaluation addPeerEvaluation(PeerEvaluation newPeerEvaluation) {
+        newPeerEvaluation.setEvaluatee(requireActiveTarget(newPeerEvaluation.getEvaluatee().getId()));
         // Make sure the submission week is one of the course section's active weeks and is still open for submission
         requireOpenSubmissionWindow(newPeerEvaluation.getEvaluator().getSection(), newPeerEvaluation.getWeek(), NOT_PREVIOUS_WEEK_MESSAGE);
 
@@ -78,6 +79,7 @@ public class EvaluationService {
     public PeerEvaluation updatePeerEvaluation(Integer evaluationId, PeerEvaluation update) {
         return this.evaluationRepository.findById(evaluationId)
                 .map(oldEvaluation -> {
+                    oldEvaluation.setEvaluatee(requireActiveTarget(oldEvaluation.getEvaluatee().getId()));
                     // The week is read off the stored evaluation rather than off the update, because the caller
                     // writes the payload and could otherwise name an open week to reopen a closed evaluation.
                     requireOpenSubmissionWindow(oldEvaluation.getEvaluator().getSection(), oldEvaluation.getWeek(), WINDOW_CLOSED_MESSAGE);
@@ -87,6 +89,15 @@ public class EvaluationService {
                     return this.evaluationRepository.save(oldEvaluation);
                 })
                 .orElseThrow(() -> new ObjectNotFoundException("evaluation", evaluationId));
+    }
+
+    private Student requireActiveTarget(Integer studentId) {
+        Student student = this.studentRepository.findByIdForUpdate(studentId)
+                .orElseThrow(() -> new ObjectNotFoundException("student", studentId));
+        if (!student.isEnabled()) {
+            throw new PeerEvaluationIllegalArgumentException("An inactive student cannot receive peer evaluations or updates.");
+        }
+        return student;
     }
 
     /**
@@ -221,7 +232,11 @@ public class EvaluationService {
         report.setSectionName(this.sectionRepository.findById(sectionId).orElseThrow(() -> new ObjectNotFoundException("section", sectionId)).getSectionName());
 
         // Get all students in the section
-        List<Student> students = this.studentRepository.findBySectionSectionId(sectionId).stream().filter(student -> student.getTeam() != null).collect(Collectors.toList());
+        List<Student> students = this.studentRepository.findBySectionSectionId(sectionId).stream()
+                .filter(student -> student.isEnabled()
+                        ? student.getTeam() != null
+                        : this.evaluationRepository.existsByWeekAndEvaluateeId(week, student.getId()))
+                .toList();
 
         // For each student, compute her average total score, collect all public comments and private comments, and compute rating averages for each criterion.
         students.forEach(student -> {

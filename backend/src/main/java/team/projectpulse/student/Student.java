@@ -4,8 +4,11 @@ import team.projectpulse.section.Section;
 import team.projectpulse.team.Team;
 import team.projectpulse.user.PeerEvaluationUser;
 import jakarta.persistence.*;
+import org.hibernate.annotations.DynamicUpdate;
 
 @Entity
+// Unrelated managed profile, password, and membership edits must not rewrite a stale enabled flag.
+@DynamicUpdate
 public class Student extends PeerEvaluationUser {
 
     @ManyToOne(optional = false)

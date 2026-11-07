@@ -174,7 +174,7 @@ class StudentServiceTest {
         assertThat(result.getLastName()).isEqualTo(update.getLastName());
         assertThat(result.getEmail()).isEqualTo(update.getEmail());
 //        assertThat(result.getRoles()).isEqualTo(update.getRoles());
-        assertThat(result.isEnabled()).isEqualTo(update.isEnabled());
+        assertThat(result.isEnabled()).isNotEqualTo(update.isEnabled());
     }
 
     @Test
@@ -190,4 +190,17 @@ class StudentServiceTest {
         verify(this.studentRepository, times(1)).deleteById(1);
     }
 
+
+    @Test
+    void profileUpdateCannotReactivateAnInactiveStudent() {
+        Student inactive = this.students.getFirst();
+        inactive.setEnabled(false);
+        Student update = new Student("updated", "Changed", "Name", "changed@example.test", "unused", true, "admin");
+        given(studentRepository.findById(1)).willReturn(Optional.of(inactive));
+        given(studentRepository.save(inactive)).willReturn(inactive);
+        Student result = studentService.updateStudent(1, update);
+        assertThat(result.isEnabled()).isFalse();
+        assertThat(result.getRoles()).isEqualTo("student");
+        assertThat(result.getFirstName()).isEqualTo("Changed");
+    }
 }
