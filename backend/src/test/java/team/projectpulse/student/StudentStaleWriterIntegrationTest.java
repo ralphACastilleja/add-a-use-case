@@ -54,6 +54,7 @@ class StudentStaleWriterIntegrationTest extends AbstractIntegrationTest {
     @Autowired UserService userService;
     @Autowired StudentRepository studentRepository;
     @Autowired EvaluationService evaluationService;
+    @Autowired team.projectpulse.notification.SubmissionStatusService submissionStatus;
 
     enum Writer { PROFILE, ASSIGN_TEAM, REMOVE_TEAM, TRANSFER_TEAM, RESET_PASSWORD }
     record Fixture(Integer studentId, Integer courseId, Integer instructorId,
@@ -289,6 +290,50 @@ class StudentStaleWriterIntegrationTest extends AbstractIntegrationTest {
                 assertThat(entityManager.find(Student.class, other.studentId()).isEnabled()).isEqualTo(enabled);
             });
         } finally { cleanup(own); cleanup(other); }
+    }
+
+    @Test
+    void withdrawalPreservesWorkAndRecomputesWhatActiveTeammateOwes() {
+        Fixture f = transaction().execute(status -> createFixture());
+        try {
+            Integer withdrawn = transaction().execute(status -> {
+                Student active = entityManager.find(Student.class, f.studentId());
+                Student leaving = new Student("withdrawn-" + f.email(), "Withdrawn", "Student", "withdrawn-" + f.email(), "Password1", true, "student");
+                active.getSection().addStudent(leaving);
+                active.getTeam().addStudent(leaving);
+                entityManager.persist(leaving);
+                var activity = new team.projectpulse.activity.Activity();
+                activity.setStudent(leaving); activity.setTeam(active.getTeam()); activity.setWeek("2023-W32");
+                entityManager.persist(activity);
+                entityManager.persist(new PeerEvaluation("2023-W32", leaving, leaving, List.of(), "retained history", "private"));
+                return leaving.getId();
+            });
+            saveEvaluation(f); // Active teammate has evaluated herself, but not the withdrawn student.
+            authenticate(f.instructorId(), "ROLE_admin");
+            transaction().executeWithoutResult(status -> {
+                Integer section = entityManager.find(Student.class, f.studentId()).getSection().getSectionId();
+                assertThat(submissionStatus.findOwing(section, team.projectpulse.notification.SubmittableItem.PEER_EVALUATION, "2023-W32"))
+                        .extracting(Student::getId).contains(f.studentId());
+                studentService.deactivateStudent(withdrawn);
+            });
+            transaction().executeWithoutResult(status -> {
+                Student leaving = entityManager.find(Student.class, withdrawn);
+                Integer section = leaving.getSection().getSectionId();
+                assertThat(leaving.getTeam().getTeamId()).isEqualTo(f.teamId());
+                assertThat(entityManager.createQuery("select count(a) from Activity a where a.student.id = :id", Long.class).setParameter("id", withdrawn).getSingleResult()).isEqualTo(1);
+                assertThat(entityManager.createQuery("select count(e) from PeerEvaluation e where e.evaluatee.id = :id", Long.class).setParameter("id", withdrawn).getSingleResult()).isEqualTo(1);
+                assertThat(submissionStatus.findOwing(section, team.projectpulse.notification.SubmittableItem.PEER_EVALUATION, "2023-W32")).isEmpty();
+                assertThat(submissionStatus.findOwing(section, team.projectpulse.notification.SubmittableItem.WEEKLY_ACTIVITY_REPORT, "2023-W32"))
+                        .extracting(Student::getId).doesNotContain(withdrawn);
+            });
+        } finally {
+            SecurityContextHolder.clearContext();
+            transaction().executeWithoutResult(status -> {
+                entityManager.createQuery("delete from Activity a where a.team.teamId = :team").setParameter("team", f.teamId()).executeUpdate();
+                entityManager.createQuery("delete from PeerEvaluation e where e.evaluatee.team.teamId = :team").setParameter("team", f.teamId()).executeUpdate();
+            });
+            cleanup(f);
+        }
     }
 
     private Integer saveEvaluation(Fixture f) {
