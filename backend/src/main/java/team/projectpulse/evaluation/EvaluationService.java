@@ -49,7 +49,6 @@ public class EvaluationService {
     }
 
     public PeerEvaluation addPeerEvaluation(PeerEvaluation newPeerEvaluation) {
-        newPeerEvaluation.setEvaluatee(requireActiveTarget(newPeerEvaluation.getEvaluatee().getId()));
         // Make sure the submission week is one of the course section's active weeks and is still open for submission
         requireOpenSubmissionWindow(newPeerEvaluation.getEvaluator().getSection(), newPeerEvaluation.getWeek(), NOT_PREVIOUS_WEEK_MESSAGE);
 
@@ -60,13 +59,19 @@ public class EvaluationService {
             throw new PeerEvaluationIllegalArgumentException("You must be assigned to a team before submitting a peer evaluation.");
         }
 
-        // Make sure the evaluator and evaluatee are on the same team. Compare team ids: Team does not override
-        // equals, so comparing the entities is identity comparison and only happens to hold within one session.
+        // The evaluator is stamped from the caller by DTO conversion. Scope the locking
+        // lookup to her team before inspecting the target's account status.
         Integer evaluatorTeamId = evaluatorTeam.getTeamId();
-        Team evaluateeTeam = newPeerEvaluation.getEvaluatee().getTeam();
-        if (evaluatorTeamId == null || evaluateeTeam == null || !evaluatorTeamId.equals(evaluateeTeam.getTeamId())) {
+        if (evaluatorTeamId == null) {
             throw new PeerEvaluationIllegalArgumentException("The evaluator and evaluatee must be on the same team.");
         }
+        Student target = this.studentRepository.findByIdAndTeamIdForUpdate(
+                        newPeerEvaluation.getEvaluatee().getId(), evaluatorTeamId)
+                .orElseThrow(() -> new PeerEvaluationIllegalArgumentException("The evaluator and evaluatee must be on the same team."));
+        if (!target.isEnabled()) {
+            throw new PeerEvaluationIllegalArgumentException("An inactive student cannot receive peer evaluations or updates.");
+        }
+        newPeerEvaluation.setEvaluatee(target);
 
         // Make sure this is not a duplicate evaluation
         if (this.evaluationRepository.findByWeekAndEvaluatorIdAndEvaluateeId(newPeerEvaluation.getWeek(), newPeerEvaluation.getEvaluator().getId(), newPeerEvaluation.getEvaluatee().getId()).isPresent()) {

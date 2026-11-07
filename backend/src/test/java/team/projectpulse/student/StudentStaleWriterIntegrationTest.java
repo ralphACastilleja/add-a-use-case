@@ -268,6 +268,29 @@ class StudentStaleWriterIntegrationTest extends AbstractIntegrationTest {
         } finally { commit.countDown(); cleanup(f); }
     }
 
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void outOfScopeTargetIsRefusedWithoutDisclosingStatus(boolean enabled) {
+        Fixture own = transaction().execute(status -> createFixture());
+        Fixture other = transaction().execute(status -> createFixture());
+        try {
+            transaction().executeWithoutResult(status ->
+                    entityManager.find(Student.class, other.studentId()).setEnabled(enabled));
+            assertThatThrownBy(() -> transaction().executeWithoutResult(status -> {
+                Student caller = entityManager.find(Student.class, own.studentId());
+                Student target = entityManager.find(Student.class, other.studentId());
+                evaluationService.addPeerEvaluation(new PeerEvaluation("2023-W32", caller, target, List.of(), "", ""));
+            })).isInstanceOf(PeerEvaluationIllegalArgumentException.class)
+                    .hasMessage("The evaluator and evaluatee must be on the same team.");
+            transaction().executeWithoutResult(status -> {
+                assertThat(entityManager.createQuery(
+                        "select count(e) from PeerEvaluation e where e.evaluatee.id = :id", Long.class)
+                        .setParameter("id", other.studentId()).getSingleResult()).isZero();
+                assertThat(entityManager.find(Student.class, other.studentId()).isEnabled()).isEqualTo(enabled);
+            });
+        } finally { cleanup(own); cleanup(other); }
+    }
+
     private Integer saveEvaluation(Fixture f) {
         return transaction().execute(status -> {
             Student student = entityManager.find(Student.class, f.studentId());

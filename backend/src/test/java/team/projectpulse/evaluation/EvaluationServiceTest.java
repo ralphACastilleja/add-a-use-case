@@ -139,6 +139,11 @@ class EvaluationServiceTest {
         org.mockito.Mockito.lenient().when(studentRepository.findByIdForUpdate(anyInt()))
                 .thenAnswer(invocation -> this.students.stream()
                         .filter(student -> student.getId().equals(invocation.getArgument(0))).findFirst());
+        org.mockito.Mockito.lenient().when(studentRepository.findByIdAndTeamIdForUpdate(anyInt(), anyInt()))
+                .thenAnswer(invocation -> this.students.stream()
+                        .filter(student -> student.getId().equals(invocation.getArgument(0)))
+                        .filter(student -> student.getTeam() != null && student.getTeam().getTeamId().equals(invocation.getArgument(1)))
+                        .findFirst());
         this.john = john;
         this.eric = eric;
         this.woody = woody;
@@ -680,6 +685,9 @@ class EvaluationServiceTest {
 
     @Test
     void rejectInactiveTargetOnCreate() {
+        Clock fixed = Clock.fixed(Instant.parse("2023-08-08T12:00:00Z"), ZoneOffset.UTC);
+        given(clock.instant()).willReturn(fixed.instant());
+        given(clock.getZone()).willReturn(fixed.getZone());
         this.eric.setEnabled(false);
         PeerEvaluation evaluation = new PeerEvaluation("2023-W31", john, eric, List.of(), "new", "private");
         assertThatThrownBy(() -> evaluationService.addPeerEvaluation(evaluation))
@@ -714,5 +722,21 @@ class EvaluationServiceTest {
         assertThat(evaluationService.generateWeeklyPeerEvaluationReportForSection(2, "2023-W32")
                 .getPeerEvaluationAverages()).extracting(PeerEvaluationAverage::getStudentId)
                 .containsExactly(john.getId());
+    }
+
+    @Test
+    void outOfTeamInactiveTargetReceivesTheSameRefusalAsAnActiveTarget() {
+        Clock fixed = Clock.fixed(Instant.parse("2023-08-08T12:00:00Z"), ZoneOffset.UTC);
+        org.mockito.Mockito.lenient().when(clock.instant()).thenReturn(fixed.instant());
+        org.mockito.Mockito.lenient().when(clock.getZone()).thenReturn(fixed.getZone());
+        for (boolean enabled : List.of(true, false)) {
+            woody.setEnabled(enabled);
+            PeerEvaluation submission = new PeerEvaluation("2023-W31", eric, woody, List.of(), "", "");
+            assertThatThrownBy(() -> evaluationService.addPeerEvaluation(submission))
+                    .isInstanceOf(PeerEvaluationIllegalArgumentException.class)
+                    .hasMessage("The evaluator and evaluatee must be on the same team.");
+        }
+        verify(evaluationRepository, times(0)).save(any());
+        verify(studentRepository, times(0)).findByIdForUpdate(anyInt());
     }
 }

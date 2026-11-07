@@ -5,5 +5,6 @@ import java.util.Optional;
 /** Current reads shared by lifecycle changes and evaluation writes. Caller holds the transaction. */
 public interface StudentLockRepository {
     Optional<Student> findByIdForUpdate(Integer studentId);
+    Optional<Student> findByIdAndTeamIdForUpdate(Integer studentId, Integer teamId);
     Optional<Student> findInDeactivationScopeForUpdate(Integer studentId, Integer callerId, boolean courseAdmin);
 }

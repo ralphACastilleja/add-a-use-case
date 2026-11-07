@@ -20,6 +20,14 @@ public class StudentLockRepositoryImpl implements StudentLockRepository {
     }
 
     @Override
+    public Optional<Student> findByIdAndTeamIdForUpdate(Integer studentId, Integer teamId) {
+        return current(entityManager.createQuery(
+                "select s from Student s where s.id = :id and s.team.teamId = :teamId", Student.class)
+                .setParameter("id", studentId)
+                .setParameter("teamId", teamId));
+    }
+
+    @Override
     public Optional<Student> findInDeactivationScopeForUpdate(Integer studentId, Integer callerId, boolean courseAdmin) {
         // Hibernate's FOR UPDATE OF student leaves joined scope rows as snapshot reads on
         // MySQL. Lock the complete scope query so a committed transfer/assignment is visible.
